@@ -1,0 +1,22 @@
+[package]
+name = "cam"
+version = "0.1.0"
+edition = "2021"
+description = "Stills, clips and a live pane from any camera this machine can see."
+license = "MIT"
+repository = "https://github.com/pointman-ai/pointman-cam"
+publish = false
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+pointman-extension = { git = "https://github.com/pointman-ai/pointman-extension", rev = "62f88244af2eefd5ea4c7d63518b1e6f10d27eb8" }
+regex = "1"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = true

@@ -1,0 +1,80 @@
+[extension]
+id = "cam"
+name = "Camera"
+version = "0.1.0"
+publisher = "aurelio"
+summary = "Stills, clips and a live pane from any camera this machine can see."
+node = ">=0.1,<1"
+platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
+
+[run]
+runtime = "binary"               # one build per platform, each release (.github/workflows/release.yml)
+command = ["bin/cam"]
+
+# Any camera ffmpeg can see (Pointman's docs/dev/video.md): built-in ones, USB webcams, a phone's,
+# a camera in USB streaming mode, capture cards. Each is found by its number or any part of its name,
+# and asked for a size and rate it has, so nothing needs setting up on the camera.
+[settings]
+type = "object"
+
+[settings.properties.device]
+type = "string"
+title = "Camera"
+default = ""
+description = "The camera to use when none is named: its number or any part of its name (/cam list has them). Empty: the first one found."
+
+[settings.properties.fps]
+type = "integer"
+title = "Frames a second"
+minimum = 1
+maximum = 60
+default = 15
+description = "For the live pane and clips"
+
+[settings.properties.width]
+type = "integer"
+title = "Width"
+minimum = 160
+maximum = 3840
+default = 1280
+description = "The most pixels across, for stills, clips and the live pane (never more than the camera's own)"
+
+[settings.properties.quality]
+type = "integer"
+title = "JPEG quality"
+minimum = 2
+maximum = 31
+default = 5
+description = "ffmpeg's -q:v for stills and the live pane: lower is better and bigger"
+
+[[commands]]
+kind = "cam.list"
+title = "Cameras"
+params = { type = "object", properties = {}, additionalProperties = false }
+slash = "list"
+summary = "The cameras this machine can see, by number and name"
+
+[[commands]]
+kind = "cam.still"
+title = "Take a still"
+params = { type = "object", properties = { device = { type = "string", description = "The camera: its number or any part of its name (cam.list); left out, the machine's default. test is a test card." }, width = { type = "integer", minimum = 160, maximum = 3840, description = "The most pixels across; left out, the setting (1280)." }, thread_id = { type = "integer", description = "Post it in this thread." } }, additionalProperties = false }
+outputs = ["image"]
+slash = "still"
+summary = "A still from a camera, posted here: /cam still [camera]"
+
+[[commands]]
+kind = "cam.clip"
+title = "Record a clip"
+params = { type = "object", properties = { device = { type = "string", description = "The camera: its number or any part of its name (cam.list); left out, the machine's default. test is a test card." }, seconds = { type = "integer", minimum = 1, maximum = 60, default = 10, description = "How long, 1 to 60 seconds." }, thread_id = { type = "integer", description = "Post it in this thread." } }, additionalProperties = false }
+cancellable = true
+outputs = ["video"]
+slash = "clip"
+summary = "A clip from a camera (10 s, or up to 60), posted here: /cam clip [camera] [seconds]"
+
+# live frames from a camera to the app that opened it, sealed by the node and sent on a direct path
+# only (docs/dev/video.md); the camera runs only while a path is attached, so its light is off otherwise
+[[panes]]
+id = "live"
+title = "Camera"
+format = "video"
+opens = ["menu", "command"]      # target {device}; none: the default camera

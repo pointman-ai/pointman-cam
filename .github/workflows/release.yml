@@ -1,0 +1,73 @@
+# cam's release: push a tag that's extension.toml's version (`git tag v0.1.0 && git push origin v0.1.0`).
+# Each platform in extension.toml is built and packed as cam-<version>-<platform>.tar.gz, with
+# extension.toml, bin/cam, README.md and LICENSE at its top. Then one job makes the release with every
+# archive attached (gh keeps it a draft until they're all up), so core's `released` delivery finds each
+# platform's build; a release missing one is refused. As rota's, and message-board's sdk/template release.yml.example.
+#
+# Linux builds are musl, so static: they run on any distribution, NixOS included. Both macOS builds are
+# made on macos-14 (Apple silicon); the Intel one is cross-compiled, so its tests run on the other three.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { platform: macos-arm64, runner: macos-14, target: aarch64-apple-darwin, test: true }
+          - { platform: macos-x86_64, runner: macos-14, target: x86_64-apple-darwin, test: false }
+          - { platform: linux-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-musl, test: true }
+          - { platform: linux-arm64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, test: true }
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: The version, and the tag's
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' extension.toml | head -1)
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "the tag is $GITHUB_REF_NAME but extension.toml's version is $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - if: matrix.test
+        run: cargo test --locked --target ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Pack ${{ matrix.platform }}
+        run: |
+          mkdir -p pkg/bin
+          cp "target/${{ matrix.target }}/release/cam" pkg/bin/cam
+          chmod 755 pkg/bin/cam
+          cp extension.toml README.md LICENSE pkg/
+          tar -czf "cam-$VERSION-${{ matrix.platform }}.tar.gz" -C pkg extension.toml bin README.md LICENSE
+          tar -tzvf "cam-$VERSION-${{ matrix.platform }}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: "*.tar.gz"
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: The release, with every platform's build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
