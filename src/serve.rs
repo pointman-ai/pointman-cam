@@ -76,13 +76,21 @@ fn list(job: &Job) -> Result<Value> {
     let picked = devices::pick(&found.devices, None, &default, &machine(h)).ok();
     let mut text = format!("Cameras on {}:\n", machine(h));
     for d in &found.devices {
-        let mark = if picked.as_ref().is_some_and(|p| p.id == d.id) { " (the default)" } else { "" };
-        text += &format!("- **{}** {}{mark}\n", d.id, d.name);
+        let mut marks = Vec::new();
+        if d.is_virtual() {
+            marks.push("virtual");
+        }
+        if picked.as_ref().is_some_and(|p| p.id == d.id) {
+            marks.push("the default");
+        }
+        let marks = if marks.is_empty() { String::new() } else { format!(" ({})", marks.join(", ")) };
+        text += &format!("- **{}** {}{marks}\n", d.id, d.name);
     }
     for note in &found.notes {
         text += &format!("\n{note}\n");
     }
-    let listed: Vec<Value> = found.devices.iter().map(|d| json!({"id": d.id, "name": d.name})).collect();
+    let listed: Vec<Value> =
+        found.devices.iter().map(|d| json!({"id": d.id, "name": d.name, "virtual": d.is_virtual()})).collect();
     Ok(json!({"devices": listed, "default": picked.map(|d| d.id), "notes": found.notes, "text": text.trim_end()}))
 }
 

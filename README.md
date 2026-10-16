@@ -19,7 +19,10 @@ One Rust binary, `bin/cam`, built for each platform and written with the
 - **test** is a test card (ffmpeg's testsrc2, with its running time drawn on) that works anywhere.
 
 A camera is named by its number (`0`, `g0` for gphoto2's), its name, or any part of its name, in any case:
-`device=sony`. With none named, the `device` setting decides; with none set, the first camera. Nothing
+`device=sony`. With none named, the `device` setting decides. With none set, cam takes the likeliest real
+camera: a body in PC Remote mode, then the first camera that isn't a Desk View or virtual, and a virtual
+one (OBS's, Imaging Edge Webcam's, Snap Camera, Camo…, by their names) only when there's nothing else.
+`cam.list` marks the virtual ones. Nothing
 needs setting up on a camera: cam asks each one which sizes and rates it has and picks one of those
 (avfoundation takes only a rate at the top of one of a mode's ranges; v4l2 gets MJPEG where the camera has
 it). A camera that's unplugged and plugged back in is found again by name.
@@ -61,7 +64,7 @@ Per machine, in `~/.config/pointman/extensions/cam/config.toml`:
 
 | Setting | Default | |
 |---|---|---|
-| `device` | first camera | The camera when none is named |
+| `device` | the likeliest | The camera when none is named |
 | `fps` | 15 | Frames a second, for the live pane and clips |
 | `width` | 1280 | The most pixels across, for stills, clips and the live pane |
 | `quality` | 5 | ffmpeg's `-q:v` for stills and the live pane: lower is better and bigger |

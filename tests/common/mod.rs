@@ -14,15 +14,16 @@ use tempfile::TempDir;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-/// ffmpeg as far as cam needs it: a camera called Fake Camera (avfoundation, with a screen beside it
-/// that's left out) or Fake Webcam (v4l2, through CAM_SYSFS), its modes, and stills, clips and live
+/// ffmpeg as far as cam needs it: a camera called Fake Camera (avfoundation, after a virtual one and
+/// with a screen that's left out) or Fake Webcam (v4l2, through CAM_SYSFS, after v4l2loopback's), its
+/// modes, and stills, clips and live
 /// MJPEG made of the fixture frame. Each call is a line in $CAM_CALLS.
 pub const FFMPEG: &str = r#"#!/bin/sh
 echo "ffmpeg $*" >> "$CAM_CALLS"
 for last; do :; done
 case "$*" in
   *-list_devices*)
-    printf '[AVFoundation indev @ 0x1] AVFoundation video devices:\n[AVFoundation indev @ 0x1] [0] Fake Camera\n[AVFoundation indev @ 0x1] [1] Capture screen 0\n[AVFoundation indev @ 0x1] AVFoundation audio devices:\n[AVFoundation indev @ 0x1] [0] Fake Microphone\n[in#0 @ 0x2] Error opening input: Input/output error\n' >&2
+    printf '[AVFoundation indev @ 0x1] AVFoundation video devices:\n[AVFoundation indev @ 0x1] [0] OBS Virtual Camera\n[AVFoundation indev @ 0x1] [1] Fake Camera\n[AVFoundation indev @ 0x1] [2] Capture screen 0\n[AVFoundation indev @ 0x1] AVFoundation audio devices:\n[AVFoundation indev @ 0x1] [0] Fake Microphone\n[in#0 @ 0x2] Error opening input: Input/output error\n' >&2
     exit 1 ;;
   *"-video_size 1x1"*)
     printf '[avfoundation @ 0x1] Selected video size (1x1) is not supported by the device.\n[avfoundation @ 0x1] Supported modes:\n[avfoundation @ 0x1]   640x480@[1.000000 30.000000]fps\n[avfoundation @ 0x1]   1280x720@[1.000000 30.000000]fps\n[avfoundation @ 0x1]   1920x1080@[1.000000 30.000000]fps\n' >&2
@@ -142,11 +143,13 @@ impl Cam {
         if tools.gphoto2 {
             script("gphoto2", GPHOTO2);
         }
-        // one fake webcam for v4l2, as sysfs lists it
-        let sysfs = dir.path().join("sysfs/video0");
-        fs::create_dir_all(&sysfs).unwrap();
-        fs::write(sysfs.join("name"), "Fake Webcam\n").unwrap();
-        fs::write(sysfs.join("index"), "0\n").unwrap();
+        // a virtual camera and a fake webcam for v4l2, as sysfs lists them
+        for (node, name) in [("video0", "Dummy video device (0x0000)"), ("video1", "Fake Webcam")] {
+            let sysfs = dir.path().join("sysfs").join(node);
+            fs::create_dir_all(&sysfs).unwrap();
+            fs::write(sysfs.join("name"), format!("{name}\n")).unwrap();
+            fs::write(sysfs.join("index"), "0\n").unwrap();
+        }
         let calls = dir.path().join("calls");
         fs::write(&calls, "").unwrap();
         let path = std::env::join_paths([bin.as_path(), Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
@@ -194,5 +197,14 @@ pub fn fake_camera() -> &'static str {
         "Fake Camera"
     } else {
         "Fake Webcam"
+    }
+}
+
+/// The virtual camera listed before it.
+pub fn fake_virtual() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "OBS Virtual Camera"
+    } else {
+        "Dummy video device (0x0000)"
     }
 }

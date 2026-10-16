@@ -21,7 +21,7 @@ type = "object"
 type = "string"
 title = "Camera"
 default = ""
-description = "The camera to use when none is named: its number or any part of its name (/cam list has them). Empty: the first one found."
+description = "The camera to use when none is named: its number or any part of its name (/cam list has them). Empty: the likeliest real one, a camera in PC Remote mode first and a virtual one last."
 
 [settings.properties.fps]
 type = "integer"

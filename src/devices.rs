@@ -53,7 +53,41 @@ impl Device {
     pub fn is_test(&self) -> bool {
         self.id == TEST
     }
+
+    /// Whether its name says it's a virtual camera (OBS's, Imaging Edge Webcam's, Snap Camera…), which
+    /// may show a placeholder or another app's picture rather than a lens.
+    pub fn is_virtual(&self) -> bool {
+        let words: Vec<String> = self
+            .name
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(String::from)
+            .collect();
+        VIRTUAL.iter().any(|marker| {
+            let marker: Vec<&str> = marker.split(' ').collect();
+            words.windows(marker.len()).any(|w| w.iter().zip(&marker).all(|(a, b)| a == b))
+        })
+    }
+
+    /// How likely it is to be the camera someone means when they name none: a body in PC Remote mode,
+    /// then a camera, then a Desk View (a crop of another), then a virtual one.
+    fn rank(&self) -> u8 {
+        if self.is_gphoto() {
+            0
+        } else if self.is_virtual() {
+            3
+        } else if self.name.to_lowercase().contains("desk view") {
+            2
+        } else {
+            1
+        }
+    }
 }
+
+/// Words in a virtual camera's name, whole words in lower case (v4l2loopback's is "Dummy video device").
+const VIRTUAL: [&str; 11] =
+    ["virtual", "imaging edge", "obs", "snap camera", "camo", "mmhmm", "ndi", "xsplit", "manycam", "dummy", "loopback"];
 
 /// How ffmpeg reads cameras on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,15 +184,18 @@ pub fn v4l2_devices(sysfs: &Path) -> Vec<Device> {
 }
 
 /// The camera `wanted` names: its id (`0`, `test`, `/dev/video2`), its name, or any part of its name,
-/// any case (`sony`), the first that matches. Nothing named: `default` (the setting), else the first
-/// camera.
+/// any case (`sony`), the likeliest of those that match. Nothing named: `default` (the setting), else
+/// the likeliest camera: a body in PC Remote mode, then the first that isn't a Desk View or virtual,
+/// and a virtual one only when there's nothing else.
 pub fn pick(devices: &[Device], wanted: Option<&str>, default: &str, machine: &str) -> Result<Device> {
     let wanted = wanted.map(str::trim).filter(|w| !w.is_empty());
     let asked = wanted.or(Some(default.trim()).filter(|d| !d.is_empty()));
     let cameras: Vec<&Device> = devices.iter().filter(|d| !d.is_test()).collect();
+    // of several, the likeliest (the first, among equals)
+    let likeliest = |of: Vec<&Device>| of.into_iter().min_by_key(|d| d.rank()).cloned();
     let Some(asked) = asked else {
-        return match cameras.first() {
-            Some(first) => Ok((*first).clone()),
+        return match likeliest(cameras) {
+            Some(camera) => Ok(camera),
             None => bail!("{machine} has no camera cam can see (device test is a test card)"),
         };
     };
@@ -167,9 +204,10 @@ pub fn pick(devices: &[Device], wanted: Option<&str>, default: &str, machine: &s
         .iter()
         .find(|d| d.id.to_lowercase() == key)
         .or_else(|| devices.iter().find(|d| d.name.to_lowercase() == key))
-        .or_else(|| devices.iter().find(|d| d.name.to_lowercase().contains(&key)));
+        .cloned()
+        .or_else(|| likeliest(devices.iter().filter(|d| d.name.to_lowercase().contains(&key)).collect()));
     match found {
-        Some(d) => Ok(d.clone()),
+        Some(d) => Ok(d),
         None => {
             let have: Vec<String> = cameras.iter().map(|d| format!("{} {}", d.id, d.name)).collect();
             let have = if have.is_empty() { "none".to_string() } else { have.join(", ") };
@@ -480,6 +518,57 @@ mod tests {
         );
         let e = super::pick(&[Device::test()], None, "", "pi").unwrap_err().to_string();
         assert_eq!(e, "pi has no camera cam can see (device test is a test card)");
+    }
+
+    /// mac-m4's list on 16 October, with Imaging Edge Webcam and OBS installed.
+    const MAC_M4: &str = "\
+[AVFoundation indev @ 0x1] AVFoundation video devices:
+[AVFoundation indev @ 0x1] [0] Sony Camera (Imaging Edge)
+[AVFoundation indev @ 0x1] [1] MacBook Pro Camera
+[AVFoundation indev @ 0x1] [2] OBS Virtual Camera
+[AVFoundation indev @ 0x1] [3] iPhone (2) Camera
+[AVFoundation indev @ 0x1] [4] MacBook Pro Desk View Camera
+[AVFoundation indev @ 0x1] [5] iPhone (2) Desk View Camera
+[AVFoundation indev @ 0x1] [6] Capture screen 0
+[AVFoundation indev @ 0x1] AVFoundation audio devices:
+";
+
+    #[test]
+    fn with_none_named_the_likeliest_real_camera() {
+        let mac = avfoundation_devices(MAC_M4);
+        let virtuals: Vec<&str> = mac.iter().filter(|d| d.is_virtual()).map(|d| d.name.as_str()).collect();
+        assert_eq!(virtuals, ["Sony Camera (Imaging Edge)", "OBS Virtual Camera"]);
+        let pick = |devices: &[Device], wanted: Option<&str>| pick(devices, wanted, "", "mac-m4").unwrap().name;
+        assert_eq!(pick(&mac, None), "MacBook Pro Camera"); // not Imaging Edge's, first in the list
+                                                            // a body in PC Remote mode comes first, and wins a name both match
+        let sony = Device {
+            id: "g0".into(),
+            name: "Sony Alpha-A6400 (PC Control)".into(),
+            via: Via::Gphoto { port: "usb:020,007".into() },
+        };
+        let with_sony: Vec<Device> = mac.iter().cloned().chain([sony.clone()]).collect();
+        assert_eq!(pick(&with_sony, None), sony.name);
+        assert_eq!(pick(&with_sony, Some("sony")), sony.name);
+        assert_eq!(pick(&mac, Some("sony")), "Sony Camera (Imaging Edge)"); // the only one named so
+        assert_eq!(pick(&mac, Some("0")), "Sony Camera (Imaging Edge)"); // by number, as asked
+                                                                         // Desk View after a camera, a virtual one only when there's nothing else
+        let rest = |names: &[&str]| -> Vec<Device> {
+            names.iter().enumerate().map(|(i, n)| Device::ffmpeg(i.to_string(), *n)).collect()
+        };
+        assert_eq!(pick(&rest(&["MacBook Pro Desk View Camera", "iPhone (2) Camera"]), None), "iPhone (2) Camera");
+        assert_eq!(
+            pick(&rest(&["OBS Virtual Camera", "MacBook Pro Desk View Camera"]), None),
+            "MacBook Pro Desk View Camera"
+        );
+        assert_eq!(
+            pick(&rest(&["Sony Camera (Imaging Edge)", "OBS Virtual Camera"]), None),
+            "Sony Camera (Imaging Edge)"
+        );
+        // whole words: Jacob's camera isn't OBS's
+        let names =
+            ["Jacob's Camera", "Camouflage Cam", "Snap Camera", "Dummy video device (0x0000)", "NDI Video", "mmhmm"];
+        let flags: Vec<bool> = rest(&names).iter().map(Device::is_virtual).collect();
+        assert_eq!(flags, [false, false, true, true, true, true]);
     }
 
     #[test]

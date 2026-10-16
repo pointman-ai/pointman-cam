@@ -6,9 +6,9 @@ mod common;
 use std::thread::sleep;
 use std::time::Duration;
 
-use common::{fake_camera, Cam, Tools};
+use common::{fake_camera, fake_virtual, Cam, Tools};
 use pointman_extension::testing::RunOptions;
-use serde_json::{json, Value};
+use serde_json::json;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -20,16 +20,18 @@ fn fakes() -> Tools {
 fn it_lists_ffmpegs_cameras_and_gphoto2s_and_the_test_card() {
     let cam = Cam::start(fakes(), json!({}));
     let done = cam.node.run("cam.list", json!({})).unwrap();
-    let id = "0";
     assert_eq!(
         done.result["devices"],
-        json!([{"id": id, "name": fake_camera()}, {"id": "g0", "name": "Sony Alpha-A6400 (PC Control)"},
-               {"id": "test", "name": "Test card"}])
+        json!([{"id": "0", "name": fake_virtual(), "virtual": true}, {"id": "1", "name": fake_camera(), "virtual": false},
+               {"id": "g0", "name": "Sony Alpha-A6400 (PC Control)", "virtual": false},
+               {"id": "test", "name": "Test card", "virtual": false}])
     );
-    assert_eq!(done.result["default"], id);
+    // with none set, a body in PC Remote mode is the likeliest camera
+    assert_eq!(done.result["default"], "g0");
     let text = done.result["text"].as_str().unwrap();
     assert!(text.starts_with("Cameras on mac-m4:\n"), "{text}");
-    assert!(text.contains(&format!("- **0** {} (the default)", fake_camera())), "{text}");
+    assert!(text.contains(&format!("- **0** {} (virtual)\n", fake_virtual())), "{text}");
+    assert!(text.contains("- **g0** Sony Alpha-A6400 (PC Control) (the default)\n"), "{text}");
     // the screen and the iPhone, which can't take pictures, aren't cameras
     assert!(!text.contains("Capture screen") && !text.contains("iPhone"), "{text}");
 }
@@ -38,6 +40,7 @@ fn it_lists_ffmpegs_cameras_and_gphoto2s_and_the_test_card() {
 fn without_gphoto2_it_says_how_to_get_it() {
     let cam = Cam::start(Tools { gphoto2: false, ..fakes() }, json!({}));
     let done = cam.node.run("cam.list", json!({})).unwrap();
+    assert_eq!(done.result["default"], "1", "the camera, not the virtual one listed first");
     let note = done.result["notes"][0].as_str().unwrap();
     assert!(
         note.starts_with("For cameras in PC Remote mode (Sony, Canon, Nikon, Fuji): gphoto2 isn't installed"),
@@ -47,7 +50,10 @@ fn without_gphoto2_it_says_how_to_get_it() {
     assert!(done.result["text"].as_str().unwrap().contains("brew install gphoto2"));
     // a camera that isn't there says what is, and the note
     let e = cam.node.run("cam.still", json!({"device": "sony"})).unwrap_err().message;
-    assert!(e.starts_with(&format!("no camera 'sony' on mac-m4: it has 0 {}", fake_camera())), "{e}");
+    assert!(
+        e.starts_with(&format!("no camera 'sony' on mac-m4: it has 0 {}, 1 {}", fake_virtual(), fake_camera())),
+        "{e}"
+    );
     assert!(e.contains("brew install gphoto2"), "{e}");
 }
 
@@ -67,7 +73,7 @@ fn a_still_waits_for_the_camera_to_settle_in_a_mode_it_has() {
         assert!(still.contains("-f avfoundation -video_size 1280x720 -framerate 30 -i Fake Camera"), "{still}");
     } else {
         assert!(
-            still.contains("-f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 15 -i /dev/video0"),
+            still.contains("-f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 15 -i /dev/video1"),
             "{still}"
         );
     }
@@ -78,7 +84,7 @@ fn a_still_waits_for_the_camera_to_settle_in_a_mode_it_has() {
 #[test]
 fn a_clip_says_how_far_it_is_and_is_published_as_a_video() {
     let cam = Cam::start(fakes(), json!({}));
-    let done = cam.node.run("cam.clip", json!({"seconds": 3})).unwrap();
+    let done = cam.node.run("cam.clip", json!({"device": "fake", "seconds": 3})).unwrap();
     assert_eq!(done.result["seconds"], 3);
     assert_eq!((done.result["width"].clone(), done.result["height"].clone()), (json!(1280), json!(720)));
     assert_eq!(done.result["text"], format!("3 s from {}, 1280×720 at 15 fps", fake_camera()));
@@ -113,7 +119,7 @@ fn a_clip_can_be_cancelled() {
 #[test]
 fn the_live_pane_starts_the_camera_only_while_someone_watches() {
     let cam = Cam::start(fakes(), json!({}));
-    let view = cam.node.open_pane("live", Value::Null).unwrap();
+    let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
     assert_eq!(view.format().as_deref(), Some("video"));
     assert_eq!(view.title().as_deref(), Some(fake_camera()));
     assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15}));
@@ -159,7 +165,7 @@ fn the_live_pane_starts_the_camera_only_while_someone_watches() {
 #[test]
 fn closing_the_pane_stops_the_camera() {
     let cam = Cam::start(fakes(), json!({}));
-    let view = cam.node.open_pane("live", json!({"device": "0"})).unwrap();
+    let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.frame_count() >= 2).unwrap();
     view.close("no_viewer").unwrap();
@@ -171,7 +177,7 @@ fn closing_the_pane_stops_the_camera() {
 fn a_camera_that_stops_sending_is_tried_again() {
     // the fake camera goes away after 3 frames each time
     let cam = Cam::start(Tools { env: &[("CAM_DIE_AFTER", "3")], ..fakes() }, json!({}));
-    let view = cam.node.open_pane("live", Value::Null).unwrap();
+    let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
     view.viewers(1).unwrap();
     cam.wait_calls("-f mjpeg pipe:1", 2, WAIT);
     view.wait(WAIT, |v| v.frame_count() >= 4).unwrap();
