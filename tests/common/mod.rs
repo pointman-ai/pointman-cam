@@ -16,14 +16,14 @@ pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// ffmpeg as far as cam needs it: a camera called Fake Camera (avfoundation, after a virtual one and
 /// with a screen that's left out) or Fake Webcam (v4l2, through CAM_SYSFS, after v4l2loopback's), its
-/// modes, and stills, clips and live
-/// MJPEG made of the fixture frame. Each call is a line in $CAM_CALLS.
+/// modes and microphones, and stills, clips and live MJPEG made of the fixture frame, with sound (the
+/// fixture's 0.2 s of ADTS, again and again). Each call is a line in $CAM_CALLS.
 pub const FFMPEG: &str = r#"#!/bin/sh
 echo "ffmpeg $*" >> "$CAM_CALLS"
 for last; do :; done
 case "$*" in
   *-list_devices*)
-    printf '[AVFoundation indev @ 0x1] AVFoundation video devices:\n[AVFoundation indev @ 0x1] [0] OBS Virtual Camera\n[AVFoundation indev @ 0x1] [1] Fake Camera\n[AVFoundation indev @ 0x1] [2] Capture screen 0\n[AVFoundation indev @ 0x1] AVFoundation audio devices:\n[AVFoundation indev @ 0x1] [0] Fake Microphone\n[in#0 @ 0x2] Error opening input: Input/output error\n' >&2
+    printf '[AVFoundation indev @ 0x1] AVFoundation video devices:\n[AVFoundation indev @ 0x1] [0] OBS Virtual Camera\n[AVFoundation indev @ 0x1] [1] Fake Camera\n[AVFoundation indev @ 0x1] [2] Capture screen 0\n[AVFoundation indev @ 0x1] AVFoundation audio devices:\n[AVFoundation indev @ 0x1] [0] Fake Microphone\n[AVFoundation indev @ 0x1] [1] Desk Mic\n[in#0 @ 0x2] Error opening input: Input/output error\n' >&2
     exit 1 ;;
   *"-video_size 1x1"*)
     printf '[avfoundation @ 0x1] Selected video size (1x1) is not supported by the device.\n[avfoundation @ 0x1] Supported modes:\n[avfoundation @ 0x1]   640x480@[1.000000 30.000000]fps\n[avfoundation @ 0x1]   1280x720@[1.000000 30.000000]fps\n[avfoundation @ 0x1]   1920x1080@[1.000000 30.000000]fps\n' >&2
@@ -42,6 +42,9 @@ case "$*" in
     printf 'fake mp4' > "$last"
     echo progress=end
     exit 0 ;;
+  *"-f adts pipe:1"*)
+    trap 'echo "ffmpeg sound stopped" >> "$CAM_CALLS"; exit 255' INT TERM
+    while :; do cat "$CAM_SOUND"; sleep 0.2; done ;;
   *"-f mjpeg pipe:1"*)
     trap 'echo "ffmpeg stopped" >> "$CAM_CALLS"; exit 255' INT TERM
     n=0
@@ -150,6 +153,13 @@ impl Cam {
             fs::write(sysfs.join("name"), format!("{name}\n")).unwrap();
             fs::write(sysfs.join("index"), "0\n").unwrap();
         }
+        // ALSA's cards, the webcam's among them
+        let cards = dir.path().join("cards");
+        fs::write(
+            &cards,
+            " 0 [Webcam         ]: USB-Audio - Fake Webcam\n 1 [Desk           ]: USB-Audio - Desk Mic\n",
+        )
+        .unwrap();
         let calls = dir.path().join("calls");
         fs::write(&calls, "").unwrap();
         let path = std::env::join_paths([bin.as_path(), Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
@@ -165,6 +175,8 @@ impl Cam {
             .env("CAM_CALLS", &calls)
             .env("CAM_FRAME", fixture("frame.jpg"))
             .env("CAM_PHOTO", fixture("photo.jpg"))
+            .env("CAM_SOUND", fixture("sound.adts"))
+            .env("CAM_ASOUND", &cards)
             .env("CAM_SYSFS", dir.path().join("sysfs"))
             .env("CAM_CLAIM_ONCE", dir.path().join("claimed"))
             .start()

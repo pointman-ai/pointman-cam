@@ -71,7 +71,8 @@ fn the_live_test_card_follows_its_hints() {
     let Some(cam) = card() else { return };
     let view = cam.node.open_pane("live", Value::Null).unwrap();
     assert_eq!(view.title().as_deref(), Some("Test card"));
-    assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15}));
+    let audio = json!({"codec": "aac", "rate": 48000, "channels": 1}); // its sine's
+    assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15, "audio": audio}));
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.frame_count() >= 5).unwrap();
     let frame = view.video_frames().pop().unwrap();
@@ -90,6 +91,33 @@ fn the_live_test_card_follows_its_hints() {
     let paused = view.frame_count();
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(view.frame_count(), paused);
+    view.close("closed").unwrap();
+    assert!(view.problems().is_empty(), "{:?}", view.problems());
+}
+
+#[test]
+fn the_test_cards_sound_is_a_real_sine_in_adts() {
+    let Some(cam) = card() else { return };
+    let view = cam.node.open_pane("live", Value::Null).unwrap();
+    assert_eq!(view.video()["audio"], json!({"codec": "aac", "rate": 48000, "channels": 1}));
+    view.viewers(1).unwrap();
+    view.wait(WAIT, |v| v.sound_count() >= 25).unwrap();
+    // ffmpeg's own ADTS, in runs of two frames (2048 samples, 42.7 ms), timed by their samples
+    let sounds = view.sounds();
+    assert!(sounds.iter().all(|s| s.frames == 2), "{:?}", sounds.iter().map(|s| s.frames).collect::<Vec<_>>());
+    let steps: Vec<u64> = sounds.windows(2).map(|w| w[1].captured_ms - w[0].captured_ms).collect();
+    assert!(steps.iter().all(|s| (42..=43).contains(s)), "{steps:?}");
+    // a second of sound comes in about a second
+    let (from, start) = (view.sound_count(), Instant::now());
+    std::thread::sleep(Duration::from_secs(2));
+    let per_second = (view.sound_count() - from) as f64 / start.elapsed().as_secs_f64();
+    assert!((18.0..=29.0).contains(&per_second), "{per_second} sends a second");
+
+    view.audio_hint(false).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let off = view.sound_count();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(view.sound_count(), off);
     view.close("closed").unwrap();
     assert!(view.problems().is_empty(), "{:?}", view.problems());
 }

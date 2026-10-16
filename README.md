@@ -38,7 +38,7 @@ Run on a machine like any extension's: `/cam list`, `/cam still sony`, `/cam cli
 
 | Kind | Params | What |
 |---|---|---|
-| `cam.list` | | `{devices: [{id, name}], default, notes}`: what's missing to find more, too |
+| `cam.list` | | `{devices: [{id, name, virtual}], microphones: [{id, name}], default, notes}`: what's missing to find more, too |
 | `cam.still` | `device?`, `width?`, `thread_id?` | One JPEG, published to the thread like any file. A gphoto2 camera's is its full photo, unless a `width` is asked for |
 | `cam.clip` | `device?`, `seconds` (1–60, default 10), `thread_id?` | An H.264 MP4, published; cancellable |
 
@@ -58,6 +58,18 @@ sealed by the node and sent straight to the app that opened it.
   and goes out as `pane.frame`, so a slow viewer never backs up the camera.
 - If the camera stops sending, cam tries again 1 s later, doubling to 30 s, and finds it again by name.
 
+**Sound,** when there's any (docs/dev/video.md, "Sound"): the camera's own microphone (a webcam's, a capture
+card's HDMI audio, the Mac's beside its built-in camera: the microphone whose name is the camera's), or
+the one the `audio` setting names; for the test card, a 440 Hz sine with a beep each second. A gphoto2
+body's live view has none unless `audio` names a microphone. The open says so in its `video`: `{"codec":
+"aac", "rate": 48000, "channels": 1}`.
+
+- A second ffmpeg (avfoundation's audio device on macOS, ALSA through plughw on Linux) encodes it with its
+  `aac` to ADTS. Whole frames go out in order as `pane.audio`, two at a time (43 ms), each timed by its
+  samples rather than by when it arrived.
+- It runs while a path is attached and the app's speaker is on: `audio: false` stops the microphone, and
+  the pictures carry on. A hint says only what changed, so the speaker's leaves the rate and width alone.
+
 ## Settings
 
 Per machine, in `~/.config/pointman/extensions/cam/config.toml`:
@@ -65,6 +77,7 @@ Per machine, in `~/.config/pointman/extensions/cam/config.toml`:
 | Setting | Default | |
 |---|---|---|
 | `device` | the likeliest | The camera when none is named |
+| `audio` | `camera` | The live pane's sound: `camera` (its own microphone), `none`, or a microphone's number or any part of its name |
 | `fps` | 15 | Frames a second, for the live pane and clips |
 | `width` | 1280 | The most pixels across, for stills, clips and the live pane |
 | `quality` | 5 | ffmpeg's `-q:v` for stills and the live pane: lower is better and bigger |

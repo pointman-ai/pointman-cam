@@ -4,6 +4,10 @@
 //! so a slow viewer never backs up the camera. A hint restarts the capture at its rate and width
 //! (`max_fps: 0` stops it). If the camera stops sending, it's tried again, longer apart each time,
 //! and found again by name if it came back somewhere else.
+//!
+//! Sound, when the pane has it, is a second ffmpeg: ADTS AAC cut into whole frames and sent in order as
+//! `pane.audio` about every 40 ms, timed by its samples. It runs while a path is attached and the app's
+//! speaker is on (`audio: false` stops it), so a microphone is never open with no one listening.
 
 use std::io::Read;
 use std::process::Child;
@@ -18,7 +22,11 @@ use serde_json::{json, Value};
 
 use crate::devices::{self, Device};
 use crate::jpeg::Splitter;
-use crate::{ffmpeg, gphoto, proc};
+use crate::sound::{self, Source};
+use crate::{adts, ffmpeg, gphoto, proc};
+
+/// How much sound goes in each `pane.audio`.
+const SOUND_EVERY_MS: u64 = 40;
 
 /// What the machine's settings say a stream should be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +89,26 @@ impl Capture {
     }
 }
 
+/// One run of ffmpeg for the pane's sound.
+struct Hearing {
+    child: Arc<Mutex<Child>>,
+    over: Arc<AtomicBool>,
+}
+
+impl Hearing {
+    fn stop(&self) {
+        self.over.store(true, Ordering::SeqCst);
+        let child = self.child.clone();
+        thread::spawn(move || proc::stop(&mut lock(&child)));
+    }
+}
+
+/// Which of the pane's two captures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Pictures,
+    Sound,
+}
 struct State {
     viewers: u64,
     max_fps: u32,
@@ -91,12 +119,20 @@ struct State {
     run: u64,
     /// Captures in a row that ended on their own.
     failures: u32,
+    /// The app's speaker: on until it says off.
+    speaker: bool,
+    hearing: Option<Hearing>,
+    /// The same two for sound.
+    heard: u64,
+    deaf: u32,
 }
 
 /// A live pane on one camera.
 pub struct Live {
     pane: Pane,
     device: Mutex<Device>,
+    /// Where its sound comes from, if it has any.
+    sound: Option<Source>,
     settings: Settings,
     state: Mutex<State>,
     /// A still or a clip has the camera for now (one gphoto2 or v4l2 can't share).
@@ -109,12 +145,14 @@ pub struct Live {
 static OPEN: Mutex<Vec<Arc<Live>>> = Mutex::new(Vec::new());
 
 impl Live {
-    /// A live pane on `device`, and what the pane opens with: the camera's name, and the size and rate
-    /// its frames will have. It's kept until [`close`](Self::close).
-    pub fn open(pane: Pane, device: Device, settings: Settings) -> Result<(Weak<Live>, Value)> {
+    /// A live pane on `device` (with sound from `sound`), and what the pane opens with: the camera's
+    /// name, and the size and rate its frames will have, and its sound's. It's kept until
+    /// [`close`](Self::close).
+    pub fn open(pane: Pane, device: Device, sound: Option<Source>, settings: Settings) -> Result<(Weak<Live>, Value)> {
         let live = Arc::new_cyclic(|me| Live {
             pane,
             device: Mutex::new(device),
+            sound,
             settings,
             state: Mutex::new(State {
                 viewers: 0,
@@ -124,6 +162,10 @@ impl Live {
                 capture: None,
                 run: 0,
                 failures: 0,
+                speaker: true,
+                hearing: None,
+                heard: 0,
+                deaf: 0,
             }),
             held: AtomicU32::new(0),
             me: me.clone(),
@@ -143,8 +185,11 @@ impl Live {
             let mode = devices::mode_for(&device, self.settings.width, self.settings.fps)?;
             devices::scaled(&mode, self.settings.width)
         };
-        Ok(json!({"title": device.name, "video": {"codec": "mjpeg", "width": width, "height": height,
-                  "fps": self.settings.fps}}))
+        let mut video = json!({"codec": "mjpeg", "width": width, "height": height, "fps": self.settings.fps});
+        if self.sound.is_some() {
+            video["audio"] = sound::opening();
+        }
+        Ok(json!({"title": device.name, "video": video}))
     }
 
     /// The node's count of paths attached.
@@ -153,12 +198,20 @@ impl Live {
         self.apply();
     }
 
-    /// The app's hint: at most this rate (0 pauses it) and this width.
-    pub fn hint(&self, max_fps: u32, max_width: u32) {
+    /// The app's hint, which says only what changed: at most this rate (0 pauses the pictures), this
+    /// width, and whether its speaker's on.
+    pub fn hint(&self, max_fps: Option<u32>, max_width: Option<u32>, audio: Option<bool>) {
         {
             let mut state = lock(&self.state);
-            state.max_fps = max_fps;
-            state.max_width = if max_width == 0 { self.settings.width } else { max_width };
+            if let Some(fps) = max_fps {
+                state.max_fps = fps;
+            }
+            if let Some(width) = max_width {
+                state.max_width = if width == 0 { self.settings.width } else { width };
+            }
+            if let Some(on) = audio {
+                state.speaker = on;
+            }
         }
         self.apply();
     }
@@ -170,31 +223,66 @@ impl Live {
         lock(&OPEN).retain(|l| !std::ptr::eq(Arc::as_ptr(l), self));
     }
 
-    /// Start, stop or restart the capture to match what's wanted now.
+    /// Start, stop or restart the captures to match what's wanted now.
     fn apply(&self) {
         let mut state = lock(&self.state);
+        let pictures = self.apply_pictures(&mut state);
+        let sound = self.apply_sound(&mut state);
+        drop(state);
+        if let Some(run) = pictures {
+            self.again(Kind::Pictures, run, false);
+        }
+        if let Some(run) = sound {
+            self.again(Kind::Sound, run, false);
+        }
+    }
+
+    /// The pictures' part of [`apply`](Self::apply): the run that failed to start, if one did.
+    fn apply_pictures(&self, state: &mut State) -> Option<u64> {
         let want = if state.closed || self.held.load(Ordering::SeqCst) > 0 {
             None
         } else {
             wanted(self.settings, state.viewers, state.max_fps, state.max_width)
         };
         if state.capture.as_ref().map(|c| c.want) == want {
-            return;
+            return None;
         }
         if let Some(old) = state.capture.take() {
             old.stop();
         }
-        let Some(want) = want else { return };
+        let want = want?;
         state.run += 1;
         let run = state.run;
         match self.start(want, run) {
             Ok(capture) => state.capture = Some(capture),
             Err(e) => {
                 self.pane.handle().log(format!("live {}: {e:#}", lock(&self.device).name));
-                drop(state);
-                self.again(run, false);
+                return Some(run);
             }
         }
+        None
+    }
+
+    /// The sound's part: on while a path is attached and the speaker's on.
+    fn apply_sound(&self, state: &mut State) -> Option<u64> {
+        let want = self.sound.as_ref().filter(|_| !state.closed && state.viewers > 0 && state.speaker);
+        if want.is_some() == state.hearing.is_some() {
+            return None;
+        }
+        if let Some(old) = state.hearing.take() {
+            old.stop();
+        }
+        let source = want?;
+        state.heard += 1;
+        let run = state.heard;
+        match self.listen(source, run) {
+            Ok(hearing) => state.hearing = Some(hearing),
+            Err(e) => {
+                self.pane.handle().log(format!("live sound: {e:#}"));
+                return Some(run);
+            }
+        }
+        None
     }
 
     fn start(&self, want: Want, run: u64) -> Result<Capture> {
@@ -208,28 +296,9 @@ impl Live {
         };
         let mut child = proc::spawn(&mut cmd)?;
         let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        let log = keep_log(child.stderr.take());
         let child = Arc::new(Mutex::new(child));
         let slot = Arc::new(Slot::default());
-        let log = Arc::new(Mutex::new(String::new()));
-        if let Some(mut err) = stderr {
-            let log = log.clone();
-            thread::spawn(move || {
-                let mut buf = [0u8; 4096];
-                while let Ok(n) = err.read(&mut buf) {
-                    if n == 0 {
-                        break;
-                    }
-                    let mut log = lock(&log);
-                    log.push_str(&String::from_utf8_lossy(&buf[..n]));
-                    if log.len() > 8192 {
-                        let cut = log.len() - 4096;
-                        let cut = (cut..log.len()).find(|i| log.is_char_boundary(*i)).unwrap_or(0);
-                        log.drain(..cut);
-                    }
-                }
-            });
-        }
         let (me, reading) = (self.me.clone(), slot.clone());
         let gphoto = device.is_gphoto();
         thread::spawn(move || {
@@ -253,7 +322,7 @@ impl Live {
                 live.pane
                     .handle()
                     .log(format!("live {}: it stopped after {frames} frames in {ran} s: {why}", device.name));
-                live.again(run, frames > 0 && ran >= 10);
+                live.again(Kind::Pictures, run, frames > 0 && ran >= 10);
             }
         });
         let (pane, sending) = (self.pane.clone(), slot.clone());
@@ -262,33 +331,68 @@ impl Live {
         Ok(Capture { want, child, slot })
     }
 
+    /// ffmpeg for the pane's sound, and a reader sending it, in order, as `pane.audio`.
+    fn listen(&self, source: &Source, run: u64) -> Result<Hearing> {
+        let mut child = proc::spawn(&mut sound::command(source))?;
+        let stdout = child.stdout.take();
+        let log = keep_log(child.stderr.take());
+        let over = Arc::new(AtomicBool::new(false));
+        let (me, pane, stopped) = (self.me.clone(), self.pane.clone(), over.clone());
+        thread::spawn(move || {
+            let started = Instant::now();
+            let sent = stdout.map_or(0, |out| hear(out, &pane, &stopped));
+            if stopped.load(Ordering::SeqCst) {
+                return; // stopped: the speaker's off, no one's watching, or the pane closed
+            }
+            if let Some(live) = me.upgrade() {
+                let (why, ran) = (proc::tail(&lock(&log), 3), started.elapsed().as_secs());
+                live.pane.handle().log(format!("live sound: it stopped after {sent} sends in {ran} s: {why}"));
+                live.again(Kind::Sound, run, sent > 0 && ran >= 10);
+            }
+        });
+        Ok(Hearing { child: Arc::new(Mutex::new(child)), over })
+    }
+
     /// A capture ended on its own (or didn't start): try again, longer apart each time it happens in a
-    /// row (1 s, doubling to 30), unless it ran a good while first. Before trying, the camera is found
-    /// again by its name, and asked its modes afresh.
-    fn again(&self, run: u64, ran_well: bool) {
+    /// row (1 s, doubling to 30), unless it ran a good while first. Before trying pictures again, the
+    /// camera is found again by its name, and asked its modes afresh.
+    fn again(&self, kind: Kind, run: u64, ran_well: bool) {
         let wait = {
             let mut state = lock(&self.state);
-            if state.run != run {
+            let state = &mut *state;
+            let (current, failures) = match kind {
+                Kind::Pictures => (state.run, &mut state.failures),
+                Kind::Sound => (state.heard, &mut state.deaf),
+            };
+            if current != run {
                 return;
             }
-            if let Some(gone) = state.capture.take() {
-                gone.stop();
-            }
-            state.failures = if ran_well { 1 } else { state.failures + 1 };
-            Duration::from_secs(1u64 << state.failures.saturating_sub(1).min(5)).min(Duration::from_secs(30))
+            *failures = if ran_well { 1 } else { *failures + 1 };
+            let wait = Duration::from_secs(1u64 << failures.saturating_sub(1).min(5)).min(Duration::from_secs(30));
+            match kind {
+                Kind::Pictures => state.capture.take().map(|gone| gone.stop()),
+                Kind::Sound => state.hearing.take().map(|gone| gone.stop()),
+            };
+            wait
         };
         let me = self.me.clone();
         thread::spawn(move || {
             thread::sleep(wait);
             let Some(live) = me.upgrade() else { return };
-            if lock(&live.state).run != run {
+            let current = match kind {
+                Kind::Pictures => lock(&live.state).run,
+                Kind::Sound => lock(&live.state).heard,
+            };
+            if current != run {
                 return; // something else has started it, or stopped it, since
             }
-            let mut device = lock(&live.device).clone();
-            devices::forget(&device);
-            if let Some(found) = devices::list().devices.into_iter().find(|d| d.name == device.name) {
-                device = found;
-                *lock(&live.device) = device;
+            if kind == Kind::Pictures {
+                let mut device = lock(&live.device).clone();
+                devices::forget(&device);
+                if let Some(found) = devices::list().devices.into_iter().find(|d| d.name == device.name) {
+                    device = found;
+                    *lock(&live.device) = device;
+                }
             }
             live.apply();
         });
@@ -342,6 +446,52 @@ fn read(mut out: impl Read, slot: &Slot, mut each: impl FnMut(&Frame)) -> u64 {
         }
     }
     count
+}
+
+/// ADTS out of ffmpeg's stdout to the pane, about every [`SOUND_EVERY_MS`], in order, until it ends or
+/// is stopped. How many `pane.audio`s went.
+fn hear(mut out: impl Read, pane: &Pane, stopped: &AtomicBool) -> u64 {
+    let (mut splitter, mut batcher) = (adts::Splitter::new(), adts::Batcher::new(SOUND_EVERY_MS));
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut sent = 0;
+    while !stopped.load(Ordering::SeqCst) {
+        let n = match out.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        for frame in splitter.push(&buf[..n]) {
+            if let Some((aac, captured_ms)) = batcher.push(frame, now_ms()) {
+                if !stopped.load(Ordering::SeqCst) && pane.audio(&aac, captured_ms) {
+                    sent += 1;
+                }
+            }
+        }
+    }
+    sent
+}
+
+/// The last few KiB of what a tool says, kept for when it stops on its own.
+fn keep_log(stderr: Option<impl Read + Send + 'static>) -> Arc<Mutex<String>> {
+    let log = Arc::new(Mutex::new(String::new()));
+    if let Some(mut err) = stderr {
+        let log = log.clone();
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = err.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let mut log = lock(&log);
+                log.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if log.len() > 8192 {
+                    let cut = log.len() - 4096;
+                    let cut = (cut..log.len()).find(|i| log.is_char_boundary(*i)).unwrap_or(0);
+                    log.drain(..cut);
+                }
+            }
+        });
+    }
+    log
 }
 
 /// The newest frame to the pane each time, until the capture's over; at most one per `every`.

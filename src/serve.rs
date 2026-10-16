@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::devices::{self, Device, Found};
 use crate::live::{self, Live, Settings};
-use crate::{ffmpeg, gphoto, jpeg, proc};
+use crate::{ffmpeg, gphoto, jpeg, proc, sound};
 
 pub fn serve() -> Result<()> {
     let mut ext = Extension::new()?;
@@ -86,12 +86,20 @@ fn list(job: &Job) -> Result<Value> {
         let marks = if marks.is_empty() { String::new() } else { format!(" ({})", marks.join(", ")) };
         text += &format!("- **{}** {}{marks}\n", d.id, d.name);
     }
+    if !found.mics.is_empty() {
+        text += "\nMicrophones (the audio setting takes one):\n";
+        for m in &found.mics {
+            text += &format!("- **{}** {}\n", m.id, m.name);
+        }
+    }
     for note in &found.notes {
         text += &format!("\n{note}\n");
     }
     let listed: Vec<Value> =
         found.devices.iter().map(|d| json!({"id": d.id, "name": d.name, "virtual": d.is_virtual()})).collect();
-    Ok(json!({"devices": listed, "default": picked.map(|d| d.id), "notes": found.notes, "text": text.trim_end()}))
+    let mics: Vec<Value> = found.mics.iter().map(|m| json!({"id": m.id, "name": m.name})).collect();
+    Ok(json!({"devices": listed, "microphones": mics, "default": picked.map(|d| d.id), "notes": found.notes,
+              "text": text.trim_end()}))
 }
 
 fn still(job: &Job) -> Result<Value> {
@@ -251,9 +259,11 @@ fn record(mut cmd: Command, seconds: u32, fps: u32, job: &Job) -> Result<String>
 
 fn open(pane: &Pane) -> Result<Value> {
     let h = pane.handle();
-    let (device, _) = camera(h, &pane.target()["device"])?;
+    let (device, found) = camera(h, &pane.target()["device"])?;
     let (_, s) = settings(h);
-    let (live, answer) = Live::open(pane.clone(), device, s)?;
+    let audio = h.settings()["audio"].as_str().unwrap_or("camera").to_string();
+    let sound = sound::pick(&device, &audio, &found.mics, &machine(h))?;
+    let (live, answer) = Live::open(pane.clone(), device, sound, s)?;
     let watching = live.clone();
     pane.on_viewers(move |_: &Pane, attached: u64| {
         if let Some(live) = watching.upgrade() {
@@ -265,9 +275,11 @@ fn open(pane: &Pane) -> Result<Value> {
         if event["kind"] != "hint" {
             return Err(Refused::new("the camera pane takes hints only").into());
         }
-        let number = |key: &str| event[key].as_u64().map_or(u32::MAX, |n| u32::try_from(n).unwrap_or(u32::MAX));
+        // a hint says only what changed (the speaker's alone has no rate); a rate may be a fraction
+        let number =
+            |key: &str| event[key].as_f64().filter(|n| *n >= 0.0).map(|n| n.ceil().min(f64::from(u32::MAX)) as u32);
         if let Some(live) = hinted.upgrade() {
-            live.hint(number("max_fps"), number("max_width"));
+            live.hint(number("max_fps"), number("max_width"), event["audio"].as_bool());
         }
         Ok(())
     });

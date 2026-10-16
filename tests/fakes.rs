@@ -122,7 +122,8 @@ fn the_live_pane_starts_the_camera_only_while_someone_watches() {
     let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
     assert_eq!(view.format().as_deref(), Some("video"));
     assert_eq!(view.title().as_deref(), Some(fake_camera()));
-    assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15}));
+    let audio = json!({"codec": "aac", "rate": 48000, "channels": 1}); // its own microphone's
+    assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15, "audio": audio}));
     sleep(Duration::from_millis(300));
     assert_eq!(cam.count("pipe:1"), 0, "the camera's light stays off: {:?}", cam.calls());
 
@@ -248,4 +249,77 @@ fn the_pane_takes_hints_only() {
     assert_eq!(e, "the camera pane takes hints only");
     let e = cam.node.open_pane("live", json!({"device": "canon"})).err().unwrap().message;
     assert!(e.starts_with("no camera 'canon' on mac-m4"), "{e}");
+}
+
+#[test]
+fn the_live_pane_has_the_cameras_own_sound_while_the_speakers_on() {
+    let cam = Cam::start(fakes(), json!({}));
+    let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
+    assert_eq!(view.video()["audio"], json!({"codec": "aac", "rate": 48000, "channels": 1}));
+    sleep(Duration::from_millis(300));
+    assert_eq!(cam.count("-f adts"), 0, "no microphone open with no one watching");
+
+    view.viewers(1).unwrap();
+    view.wait(WAIT, |v| v.sound_count() >= 4 && v.frame_count() >= 3).unwrap();
+    let call = cam.calls().into_iter().find(|c| c.contains("-f adts pipe:1")).unwrap();
+    if cfg!(target_os = "macos") {
+        assert!(call.contains("-f avfoundation -i :Fake Microphone"), "{call}");
+    } else {
+        assert!(call.contains("-f alsa -i plughw:CARD=Webcam,DEV=0"), "{call}");
+    }
+    assert!(
+        call.contains("-c:a aac") && call.contains("-ar 48000 -ac 1") && call.contains("-flush_packets 1"),
+        "{call}"
+    );
+    // whole ADTS frames, in order, timed by their samples
+    let sounds = view.sounds();
+    assert!(sounds.iter().all(|s| s.frames >= 2), "{sounds:?}");
+    assert!(sounds.windows(2).all(|w| w[1].captured_ms > w[0].captured_ms), "{sounds:?}");
+
+    // the speaker off stops the microphone, not the pictures or their rate
+    view.audio_hint(false).unwrap();
+    cam.wait_calls("ffmpeg sound stopped", 1, WAIT);
+    let frames = view.frame_count();
+    view.wait(WAIT, |v| v.frame_count() > frames + 2).unwrap();
+    assert_eq!(cam.count("-f mjpeg pipe:1"), 1, "the pictures weren't restarted");
+    view.audio_hint(true).unwrap();
+    cam.wait_calls("-f adts pipe:1", 2, WAIT);
+    // nobody watching: both stop
+    view.viewers(0).unwrap();
+    cam.wait_calls("ffmpeg sound stopped", 2, WAIT);
+    cam.wait_calls("ffmpeg stopped", 1, WAIT);
+    assert!(view.problems().is_empty(), "{:?}", view.problems());
+}
+
+#[test]
+fn the_audio_setting_picks_the_sound() {
+    // none: no sound at all
+    let cam = Cam::start(fakes(), json!({"audio": "none"}));
+    let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
+    assert!(view.video()["audio"].is_null(), "{}", view.video());
+    view.viewers(1).unwrap();
+    view.wait(WAIT, |v| v.frame_count() >= 2).unwrap();
+    assert_eq!(cam.count("-f adts"), 0);
+    drop(cam);
+
+    // a Sony's live view has none, unless a microphone is named
+    let cam = Cam::start(fakes(), json!({}));
+    assert!(cam.node.open_pane("live", json!({"device": "g0"})).unwrap().video()["audio"].is_null());
+    let done = cam.node.run("cam.list", json!({})).unwrap();
+    assert_eq!(done.result["microphones"][1]["name"], "Desk Mic");
+    assert!(done.result["text"].as_str().unwrap().contains("Microphones (the audio setting takes one):\n- **0**"));
+    drop(cam);
+    let cam = Cam::start(fakes(), json!({"audio": "desk"}));
+    let view = cam.node.open_pane("live", json!({"device": "g0"})).unwrap();
+    assert_eq!(view.video()["audio"]["codec"], "aac");
+    view.viewers(1).unwrap();
+    view.wait(WAIT, |v| v.sound_count() >= 2).unwrap();
+    let call = cam.calls().into_iter().find(|c| c.contains("-f adts pipe:1")).unwrap();
+    assert!(call.contains(if cfg!(target_os = "macos") { ":Desk Mic" } else { "plughw:CARD=Desk,DEV=0" }), "{call}");
+    drop(cam);
+
+    // one that isn't there says which are
+    let cam = Cam::start(fakes(), json!({"audio": "rode"}));
+    let e = cam.node.open_pane("live", json!({"device": "fake"})).err().unwrap().message;
+    assert!(e.starts_with("no microphone 'rode' on mac-m4 (the audio setting): it has 0 "), "{e}");
 }

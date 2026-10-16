@@ -112,18 +112,24 @@ impl Backend {
 #[derive(Debug, Clone, Default)]
 pub struct Found {
     pub devices: Vec<Device>,
+    /// The microphones, for the live pane's sound.
+    pub mics: Vec<crate::sound::Mic>,
     /// ffmpeg or gphoto2 isn't installed: how to get it.
     pub notes: Vec<String>,
 }
 
-/// Every camera here, ffmpeg's then gphoto2's, then the test card. A tool that isn't here leaves its
-/// cameras out, and a note says how to get it.
+/// Every camera here, ffmpeg's then gphoto2's, then the test card, and the microphones. A tool that
+/// isn't here leaves its cameras out, and a note says how to get it.
 pub fn list() -> Found {
     let mut found = Found::default();
+    let mut avfoundation = None;
     match Backend::here() {
         Some(Backend::Avfoundation) => {
             match ffmpeg::output(&["-f", "avfoundation", "-list_devices", "true", "-i", ""]) {
-                Ok(out) => found.devices.extend(avfoundation_devices(&out)),
+                Ok(out) => {
+                    found.devices.extend(avfoundation_devices(&out));
+                    avfoundation = Some(out);
+                }
                 Err(e) => found.notes.push(format!("{e:#}")),
             }
         }
@@ -138,6 +144,7 @@ pub fn list() -> Found {
         Err(e) => found.notes.push(format!("For cameras in PC Remote mode (Sony, Canon, Nikon, Fuji): {e:#}")),
     }
     found.devices.push(Device::test());
+    found.mics = crate::sound::mics(avfoundation.as_deref());
     found
 }
 
