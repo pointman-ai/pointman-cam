@@ -38,8 +38,9 @@ fn a_clip_of_the_test_card() {
     let Some(cam) = card() else { return };
     let started = Instant::now();
     let done = cam.node.run("cam.clip", json!({"seconds": 4})).unwrap();
-    // the card comes at its own rate, as a camera does
-    assert!(started.elapsed() >= Duration::from_secs(4), "{:?}", started.elapsed());
+    // the card comes at its own rate, as a camera does: 4 s at 15 fps is 60 frames, the last of them
+    // 59/15 s after the first (Linux's runner took 3.935 s)
+    assert!(started.elapsed() >= Duration::from_secs_f64(59.0 / 15.0), "{:?}", started.elapsed());
     assert_eq!((done.result["width"].clone(), done.result["height"].clone()), (json!(1280), json!(720)));
     let mp4 = std::fs::read(&done.outputs[0].path).unwrap();
     assert_eq!(&mp4[4..8], b"ftyp", "an MP4");
