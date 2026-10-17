@@ -21,7 +21,9 @@ pub fn serve() -> Result<()> {
     ext.command("cam.still", still);
     ext.command("cam.clip", clip);
     ext.pane("live", open);
-    ext.run()
+    let ran = ext.run();
+    live::close_all();
+    ran
 }
 
 /// This machine's settings: the default camera, and what a stream should be.

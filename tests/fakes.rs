@@ -175,6 +175,19 @@ fn closing_the_pane_stops_the_camera() {
 }
 
 #[test]
+fn the_nodes_shutdown_stops_a_camera_still_being_watched() {
+    // a pane left open when the node shuts cam down: its camera stops before cam exits, rather than when
+    // ffmpeg next writes into a pipe nobody reads (screenext found such leftovers, #extensions "Cam" [12361])
+    let cam = Cam::start(fakes(), json!({}));
+    let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
+    view.viewers(1).unwrap();
+    view.wait(WAIT, |v| v.frame_count() >= 2).unwrap();
+    cam.node.stop();
+    assert!(!cam.node.running(), "cam exited");
+    assert!(cam.calls().iter().any(|c| c.contains("ffmpeg stopped")), "{:?}", cam.calls());
+}
+
+#[test]
 fn a_camera_that_stops_sending_is_tried_again() {
     // the fake camera goes away after 3 frames each time
     let cam = Cam::start(Tools { env: &[("CAM_DIE_AFTER", "3")], ..fakes() }, json!({}));

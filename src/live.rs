@@ -79,13 +79,23 @@ struct Capture {
     slot: Arc<Slot>,
 }
 
+/// Tools being stopped off their pane's thread, for [`close_all`] to wait on at shutdown.
+static STOPPING: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// Stops a capture's tool gently, off this thread (gphoto2 takes up to 2 s to leave live view), kept so a
+/// shutdown can wait for it.
+fn stop_off_thread(child: Arc<Mutex<Child>>) {
+    let stopping = thread::spawn(move || proc::stop(&mut lock(&child)));
+    let mut all = lock(&STOPPING);
+    all.retain(|t| !t.is_finished());
+    all.push(stopping);
+}
+
 impl Capture {
     fn stop(&self) {
         self.slot.over.store(true, Ordering::SeqCst);
         self.slot.ready.notify_all();
-        let child = self.child.clone();
-        // gently, off this thread: gphoto2 takes up to 2 s to leave live view
-        thread::spawn(move || proc::stop(&mut lock(&child)));
+        stop_off_thread(self.child.clone());
     }
 }
 
@@ -98,8 +108,20 @@ struct Hearing {
 impl Hearing {
     fn stop(&self) {
         self.over.store(true, Ordering::SeqCst);
-        let child = self.child.clone();
-        thread::spawn(move || proc::stop(&mut lock(&child)));
+        stop_off_thread(self.child.clone());
+    }
+}
+
+/// The node is shutting cam down: every live pane closes, and cam waits for its tools to stop, so no camera
+/// or microphone stays open after it (they'd only notice the broken pipe on their next write).
+pub fn close_all() {
+    let open: Vec<Arc<Live>> = lock(&OPEN).clone();
+    for live in open {
+        live.close();
+    }
+    let stopping: Vec<thread::JoinHandle<()>> = lock(&STOPPING).drain(..).collect();
+    for t in stopping {
+        let _ = t.join();
     }
 }
 

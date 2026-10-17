@@ -44,12 +44,12 @@ case "$*" in
     exit 0 ;;
   *"-f adts pipe:1"*)
     trap 'echo "ffmpeg sound stopped" >> "$CAM_CALLS"; exit 255' INT TERM
-    while :; do cat "$CAM_SOUND"; sleep 0.2; done ;;
+    while :; do cat "$CAM_SOUND" || exit 0; sleep 0.2; done ;;
   *"-f mjpeg pipe:1"*)
     trap 'echo "ffmpeg stopped" >> "$CAM_CALLS"; exit 255' INT TERM
     n=0
     while :; do
-      cat "$CAM_FRAME"
+      cat "$CAM_FRAME" || exit 0
       n=$((n+1))
       if [ -n "$CAM_DIE_AFTER" ] && [ $n -ge "$CAM_DIE_AFTER" ]; then echo "[avfoundation] the camera went away" >&2; exit 1; fi
       sleep 0.05
@@ -93,7 +93,7 @@ case "$*" in
   *--capture-movie*)
     trap 'echo "gphoto2 stopped" >> "$CAM_CALLS"; exit 0' INT TERM
     echo "Capturing preview frames as movie to 'stdout'. Press Ctrl-C to abort." >&2
-    while :; do cat "$CAM_FRAME"; sleep 0.05; done ;;
+    while :; do cat "$CAM_FRAME" || exit 0; sleep 0.05; done ;;
 esac
 echo "*** Error: nothing for $* ***" >&2
 exit 1
