@@ -2,8 +2,9 @@
 
 A Pointman extension: stills, clips and a live pane from any camera a node can see. The built-in camera,
 USB webcams, a phone's camera (Continuity Camera), capture cards, and most Sony, Canon, Nikon and Fuji
-bodies over USB, with no app from their maker. It's generic, tied to no other extension. The spec is
-Pointman's docs/dev/video.md.
+bodies over USB, with no app from their maker. It's generic, tied to no other extension. Its live pane is a
+Pointman video pane: the node seals each frame and sends it straight to the app that opened it, never
+through Pointman's server.
 
 One Rust binary, `bin/cam`, built for each platform and written with the
 [pointman-extension](https://github.com/pointman-ai/pointman-extension) crate.
@@ -58,7 +59,7 @@ sealed by the node and sent straight to the app that opened it.
   and goes out as `pane.frame`, so a slow viewer never backs up the camera.
 - If the camera stops sending, cam tries again 1 s later, doubling to 30 s, and finds it again by name.
 
-**Sound,** when there's any (docs/dev/video.md, "Sound"): the camera's own microphone (a webcam's, a capture
+**Sound,** when there's any: the camera's own microphone (a webcam's, a capture
 card's HDMI audio, the Mac's beside its built-in camera: the microphone whose name is the camera's), or
 the one the `audio` setting names; for the test card, a 440 Hz sine with a beep each second. A gphoto2
 body's live view has none unless `audio` names a microphone. The open says so in its `video`: `{"codec":

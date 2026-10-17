@@ -1,7 +1,7 @@
 [extension]
 id = "cam"
 name = "Camera"
-version = "0.1.1"
+version = "0.1.2"
 publisher = "aurelio"
 summary = "Stills, clips and a live pane from any camera this machine can see."
 node = ">=0.1,<1"
