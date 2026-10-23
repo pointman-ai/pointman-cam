@@ -3,11 +3,15 @@
 
 mod common;
 
+use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use common::{fake_camera, fake_virtual, Cam, Tools};
+use common::{fake_camera, fake_virtual, video, Cam, Tools};
+use pointman_extension::convert::from_struct;
+use pointman_extension::protocol::output_request::Role;
 use pointman_extension::testing::RunOptions;
+use pointman_extension::v1::PaneFormat;
 use serde_json::json;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -65,9 +69,9 @@ fn a_still_waits_for_the_camera_to_settle_in_a_mode_it_has() {
     assert_eq!((done.result["width"].clone(), done.result["height"].clone()), (json!(640), json!(424)));
     assert_eq!(done.outputs.len(), 1);
     let out = &done.outputs[0];
-    assert_eq!((out.kind.as_str(), out.role.as_str()), ("image", "main"));
-    assert_eq!(out.path.file_name().unwrap(), format!("{}.jpg", fake_camera()).as_str());
-    assert_eq!(out.meta["camera"], fake_camera());
+    assert_eq!((out.kind.as_str(), out.role.as_known()), ("image", Some(Role::Main)));
+    assert_eq!(Path::new(&out.path).file_name().unwrap(), format!("{}.jpg", fake_camera()).as_str());
+    assert_eq!(from_struct(&out.meta)["camera"], fake_camera());
     let still = cam.calls().into_iter().find(|c| c.contains("-frames:v 1")).unwrap();
     if cfg!(target_os = "macos") {
         assert!(still.contains("-f avfoundation -video_size 1280x720 -framerate 30 -i Fake Camera"), "{still}");
@@ -110,7 +114,7 @@ fn a_clip_can_be_cancelled() {
         });
         cam.wait_calls("-progress", 1, WAIT);
         sleep(Duration::from_millis(100));
-        assert_eq!(node.cancel("long").unwrap()["found"], true);
+        assert!(node.cancel("long").unwrap());
         let failed = run.join().unwrap().unwrap_err();
         assert!(failed.cancelled, "{failed:?}");
     });
@@ -120,10 +124,13 @@ fn a_clip_can_be_cancelled() {
 fn the_live_pane_starts_the_camera_only_while_someone_watches() {
     let cam = Cam::start(fakes(), json!({}));
     let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
-    assert_eq!(view.format().as_deref(), Some("video"));
+    assert_eq!(view.format(), Some(PaneFormat::PANE_FORMAT_VIDEO));
     assert_eq!(view.title().as_deref(), Some(fake_camera()));
-    let audio = json!({"codec": "aac", "rate": 48000, "channels": 1}); // its own microphone's
-    assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15, "audio": audio}));
+    let audio = json!({"codec": "CODEC_AAC", "rate": 48000, "channels": 1}); // its own microphone's
+    assert_eq!(
+        video(&view),
+        json!({"codec": "CODEC_MJPEG", "width": 1280, "height": 720, "fps": 15.0, "audio": audio})
+    );
     sleep(Duration::from_millis(300));
     assert_eq!(cam.count("pipe:1"), 0, "the camera's light stays off: {:?}", cam.calls());
 
@@ -208,7 +215,7 @@ fn a_sony_in_pc_remote_mode_takes_a_real_photo() {
     assert_eq!(done.result["device"], "g0");
     assert_eq!((done.result["width"].clone(), done.result["height"].clone()), (json!(1200), json!(800)));
     let out = &done.outputs[0];
-    assert_eq!(out.path.file_name().unwrap(), "Sony Alpha-A6400 (PC Control).jpg");
+    assert_eq!(Path::new(&out.path).file_name().unwrap(), "Sony Alpha-A6400 (PC Control).jpg");
     assert_eq!(std::fs::read(&out.path).unwrap(), std::fs::read(common::fixture("photo.jpg")).unwrap());
     let calls = cam.calls();
     let shot: Vec<&String> = calls.iter().filter(|c| c.contains("--capture-image-and-download")).collect();
@@ -224,7 +231,7 @@ fn a_sonys_live_view_streams_and_a_still_pauses_it() {
     let cam = Cam::start(fakes(), json!({}));
     let view = cam.node.open_pane("live", json!({"device": "g0"})).unwrap();
     assert_eq!(view.title().as_deref(), Some("Sony Alpha-A6400 (PC Control)"));
-    assert_eq!(view.video()["width"], 1024); // its size isn't known before its first frame
+    assert_eq!(video(&view)["width"], 1024); // its size isn't known before its first frame
     assert_eq!(cam.count("--capture-movie"), 0);
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.frame_count() >= 3).unwrap();
@@ -248,7 +255,7 @@ fn a_sonys_live_view_streams_and_a_still_pauses_it() {
 
     // the next one opens at the size it sent
     let next = cam.node.open_pane("live", json!({"device": "sony"})).unwrap();
-    assert_eq!((next.video()["width"].clone(), next.video()["height"].clone()), (json!(640), json!(424)));
+    assert_eq!((video(&next)["width"].clone(), video(&next)["height"].clone()), (json!(640), json!(424)));
     view.close("closed").unwrap();
     next.close("closed").unwrap();
     assert!(view.problems().is_empty(), "{:?}", view.problems());
@@ -258,7 +265,7 @@ fn a_sonys_live_view_streams_and_a_still_pauses_it() {
 fn the_pane_takes_hints_only() {
     let cam = Cam::start(fakes(), json!({}));
     let view = cam.node.open_pane("live", json!({"device": "test"})).unwrap();
-    let e = view.input(json!({"kind": "tap", "block": "x"})).unwrap_err().message;
+    let e = view.input_json(json!({"kind": "tap", "block": "x"})).unwrap_err().message;
     assert_eq!(e, "the camera pane takes hints only");
     let e = cam.node.open_pane("live", json!({"device": "canon"})).err().unwrap().message;
     assert!(e.starts_with("no camera 'canon' on mac-m4"), "{e}");
@@ -268,7 +275,7 @@ fn the_pane_takes_hints_only() {
 fn the_live_pane_has_the_cameras_own_sound_while_the_speakers_on() {
     let cam = Cam::start(fakes(), json!({}));
     let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
-    assert_eq!(view.video()["audio"], json!({"codec": "aac", "rate": 48000, "channels": 1}));
+    assert_eq!(video(&view)["audio"], json!({"codec": "CODEC_AAC", "rate": 48000, "channels": 1}));
     sleep(Duration::from_millis(300));
     assert_eq!(cam.count("-f adts"), 0, "no microphone open with no one watching");
 
@@ -309,7 +316,7 @@ fn the_audio_setting_picks_the_sound() {
     // none: no sound at all
     let cam = Cam::start(fakes(), json!({"audio": "none"}));
     let view = cam.node.open_pane("live", json!({"device": "fake"})).unwrap();
-    assert!(view.video()["audio"].is_null(), "{}", view.video());
+    assert!(video(&view)["audio"].is_null(), "{}", video(&view));
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.frame_count() >= 2).unwrap();
     assert_eq!(cam.count("-f adts"), 0);
@@ -317,14 +324,14 @@ fn the_audio_setting_picks_the_sound() {
 
     // a Sony's live view has none, unless a microphone is named
     let cam = Cam::start(fakes(), json!({}));
-    assert!(cam.node.open_pane("live", json!({"device": "g0"})).unwrap().video()["audio"].is_null());
+    assert!(video(&cam.node.open_pane("live", json!({"device": "g0"})).unwrap())["audio"].is_null());
     let done = cam.node.run("cam.list", json!({})).unwrap();
     assert_eq!(done.result["microphones"][1]["name"], "Desk Mic");
     assert!(done.result["text"].as_str().unwrap().contains("Microphones (the audio setting takes one):\n- **0**"));
     drop(cam);
     let cam = Cam::start(fakes(), json!({"audio": "desk"}));
     let view = cam.node.open_pane("live", json!({"device": "g0"})).unwrap();
-    assert_eq!(view.video()["audio"]["codec"], "aac");
+    assert_eq!(video(&view)["audio"]["codec"], "CODEC_AAC");
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.sound_count() >= 2).unwrap();
     let call = cam.calls().into_iter().find(|c| c.contains("-f adts pipe:1")).unwrap();

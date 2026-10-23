@@ -7,7 +7,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{real_ffmpeg, Cam, Tools};
+use common::{real_ffmpeg, video, Cam, Tools};
 use serde_json::{json, Value};
 
 #[test]
@@ -30,7 +30,7 @@ fn the_default_camera_for_sizes_only() {
     );
 
     let view = cam.node.open_pane("live", Value::Null).unwrap();
-    println!("live opened: {} {}", view.title().unwrap_or_default(), view.video());
+    println!("live opened: {} {}", view.title().unwrap_or_default(), video(&view));
     view.viewers(1).unwrap();
     view.wait(Duration::from_secs(20), |v| v.frame_count() >= 10).unwrap();
     let sizes: Vec<(u16, u16, usize)> = view.video_frames().iter().map(|f| (f.width, f.height, f.jpeg.len())).collect();

@@ -6,7 +6,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{real_ffmpeg, Cam, Tools};
+use common::{real_ffmpeg, video, Cam, Tools};
 use pointman_extension::testing::RunOptions;
 use serde_json::{json, Value};
 
@@ -73,8 +73,11 @@ fn the_live_test_card_follows_its_hints() {
     let Some(cam) = card() else { return };
     let view = cam.node.open_pane("live", Value::Null).unwrap();
     assert_eq!(view.title().as_deref(), Some("Test card"));
-    let audio = json!({"codec": "aac", "rate": 48000, "channels": 1}); // its sine's
-    assert_eq!(view.video(), json!({"codec": "mjpeg", "width": 1280, "height": 720, "fps": 15, "audio": audio}));
+    let audio = json!({"codec": "CODEC_AAC", "rate": 48000, "channels": 1}); // its sine's
+    assert_eq!(
+        video(&view),
+        json!({"codec": "CODEC_MJPEG", "width": 1280, "height": 720, "fps": 15.0, "audio": audio})
+    );
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.frame_count() >= 5).unwrap();
     let frame = view.video_frames().pop().unwrap();
@@ -101,7 +104,7 @@ fn the_live_test_card_follows_its_hints() {
 fn the_test_cards_sound_is_a_real_sine_in_adts() {
     let Some(cam) = card() else { return };
     let view = cam.node.open_pane("live", Value::Null).unwrap();
-    assert_eq!(view.video()["audio"], json!({"codec": "aac", "rate": 48000, "channels": 1}));
+    assert_eq!(video(&view)["audio"], json!({"codec": "CODEC_AAC", "rate": 48000, "channels": 1}));
     view.viewers(1).unwrap();
     view.wait(WAIT, |v| v.sound_count() >= 25).unwrap();
     // ffmpeg's own ADTS, in runs of two frames (2048 samples, 42.7 ms), timed by their samples
