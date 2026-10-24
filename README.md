@@ -35,7 +35,7 @@ on a Mac, `apt install gphoto2` on Debian or Ubuntu, or nix's `gphoto2`.
 ## Commands
 
 Run on a machine like any extension's: `/cam list`, `/cam still sony`, `/cam clip 0 20` in a thread, or
-`run_on_machine` for agents.
+`create_job` for agents.
 
 | Kind | Params | What |
 |---|---|---|
