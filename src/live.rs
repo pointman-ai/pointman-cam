@@ -17,8 +17,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use pointman_extension::protocol::pane_open_response::{video, Video};
+use pointman_extension::protocol::PaneOpenResponse;
 use pointman_extension::Pane;
-use serde_json::{json, Value};
 
 use crate::devices::{self, Device};
 use crate::jpeg::Splitter;
@@ -170,7 +171,12 @@ impl Live {
     /// A live pane on `device` (with sound from `sound`), and what the pane opens with: the camera's
     /// name, and the size and rate its frames will have, and its sound's. It's kept until
     /// [`close`](Self::close).
-    pub fn open(pane: Pane, device: Device, sound: Option<Source>, settings: Settings) -> Result<(Weak<Live>, Value)> {
+    pub fn open(
+        pane: Pane,
+        device: Device,
+        sound: Option<Source>,
+        settings: Settings,
+    ) -> Result<(Weak<Live>, PaneOpenResponse)> {
         let live = Arc::new_cyclic(|me| Live {
             pane,
             device: Mutex::new(device),
@@ -198,7 +204,7 @@ impl Live {
         Ok((weak, answer))
     }
 
-    fn opening(&self) -> Result<Value> {
+    fn opening(&self) -> Result<PaneOpenResponse> {
         let device = lock(&self.device).clone();
         let (width, height) = if device.is_gphoto() {
             let (w, h) = gphoto::live_size(&device);
@@ -207,11 +213,15 @@ impl Live {
             let mode = devices::mode_for(&device, self.settings.width, self.settings.fps)?;
             devices::scaled(&mode, self.settings.width)
         };
-        let mut video = json!({"codec": "mjpeg", "width": width, "height": height, "fps": self.settings.fps});
-        if self.sound.is_some() {
-            video["audio"] = sound::opening();
-        }
-        Ok(json!({"title": device.name, "video": video}))
+        let video = Video {
+            codec: video::Codec::CODEC_MJPEG.into(),
+            width: i32::try_from(width)?,
+            height: i32::try_from(height)?,
+            fps: f64::from(self.settings.fps),
+            audio: self.sound.as_ref().map(|_| sound::opening()).into(),
+            ..Default::default()
+        };
+        Ok(PaneOpenResponse::video(video).titled(&device.name))
     }
 
     /// The node's count of paths attached.

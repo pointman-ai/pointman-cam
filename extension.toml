@@ -1,10 +1,10 @@
 [extension]
 id = "cam"
 name = "Camera"
-version = "0.1.2"
+version = "0.2.0"
 publisher = "aurelio"
 summary = "Stills, clips and a live pane from any camera this machine can see."
-node = ">=0.1,<1"
+node = ">=0.2.0"
 platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
 
 [run]
