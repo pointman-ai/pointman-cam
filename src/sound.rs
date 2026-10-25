@@ -6,6 +6,7 @@
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Result};
+use pointman_extension::protocol::pane_open_response::video;
 use regex::Regex;
 
 use crate::devices::{Backend, Device};
@@ -133,8 +134,13 @@ pub fn pick(camera: &Device, setting: &str, mics: &[Mic], machine: &str) -> Resu
 }
 
 /// What the pane opens with for this sound.
-pub fn opening() -> serde_json::Value {
-    serde_json::json!({"codec": "aac", "rate": RATE, "channels": CHANNELS})
+pub fn opening() -> video::Audio {
+    video::Audio {
+        codec: video::audio::Codec::CODEC_AAC.into(),
+        rate: RATE as i32,
+        channels: CHANNELS as i32,
+        ..Default::default()
+    }
 }
 
 /// ffmpeg reading `source` as ADTS AAC on stdout, each packet as it's made.

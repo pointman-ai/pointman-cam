@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use pointman_extension::testing::StandIn;
+use pointman_extension::testing::{PaneView, StandIn};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -219,4 +219,9 @@ pub fn fake_virtual() -> &'static str {
     } else {
         "Dummy video device (0x0000)"
     }
+}
+
+/// What a video pane opened with, in the protocol's JSON (null for none).
+pub fn video(view: &PaneView) -> Value {
+    serde_json::to_value(view.video()).unwrap()
 }

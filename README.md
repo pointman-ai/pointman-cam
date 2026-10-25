@@ -35,7 +35,7 @@ on a Mac, `apt install gphoto2` on Debian or Ubuntu, or nix's `gphoto2`.
 ## Commands
 
 Run on a machine like any extension's: `/cam list`, `/cam still sony`, `/cam clip 0 20` in a thread, or
-`run_on_machine` for agents.
+`create_job` for agents.
 
 | Kind | Params | What |
 |---|---|---|
@@ -62,8 +62,8 @@ sealed by the node and sent straight to the app that opened it.
 **Sound,** when there's any: the camera's own microphone (a webcam's, a capture
 card's HDMI audio, the Mac's beside its built-in camera: the microphone whose name is the camera's), or
 the one the `audio` setting names; for the test card, a 440 Hz sine with a beep each second. A gphoto2
-body's live view has none unless `audio` names a microphone. The open says so in its `video`: `{"codec":
-"aac", "rate": 48000, "channels": 1}`.
+body's live view has none unless `audio` names a microphone. The open says so in its `video`'s `audio`:
+`{"codec": "CODEC_AAC", "rate": 48000, "channels": 1}`.
 
 - A second ffmpeg (avfoundation's audio device on macOS, ALSA through plughw on Linux) encodes it with its
   `aac` to ADTS. Whole frames go out in order as `pane.audio`, two at a time (43 ms), each timed by its

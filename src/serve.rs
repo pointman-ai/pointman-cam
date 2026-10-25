@@ -8,6 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
+use pointman_extension::protocol::output_request::Role;
+use pointman_extension::protocol::PaneOpenResponse;
+use pointman_extension::v1::PaneInput;
 use pointman_extension::{Cancelled, Extension, Handle, Job, Pane, Refused};
 use serde_json::{json, Value};
 
@@ -38,7 +41,7 @@ fn settings(h: &Handle) -> (String, Settings) {
 }
 
 fn machine(h: &Handle) -> String {
-    h.node()["machine"].as_str().filter(|m| !m.is_empty()).unwrap_or("this machine").to_string()
+    h.machine()
 }
 
 /// A camera named in params (by `device`, a string or a number), else the setting, else the first.
@@ -130,7 +133,7 @@ fn still(job: &Job) -> Result<Value> {
     };
     let bytes = std::fs::metadata(&out)?.len();
     let meta = json!({"camera": device.name, "device": device.id, "width": width, "height": height});
-    job.output(&out, "image", "main", meta);
+    job.output(&out, "image", Role::Main, meta);
     Ok(json!({"device": device.id, "name": device.name, "width": width, "height": height, "bytes": bytes,
               "text": format!("A still from {}, {width}×{height}", device.name)}))
 }
@@ -202,7 +205,7 @@ fn clip(job: &Job) -> Result<Value> {
         bail!("{} gave no clip: {}", device.name, ffmpeg::explain(&log));
     }
     let meta = json!({"camera": device.name, "device": device.id, "width": width, "height": height, "fps": s.fps});
-    job.output(&out, "video", "main", meta);
+    job.output(&out, "video", Role::Main, meta);
     Ok(json!({"device": device.id, "name": device.name, "seconds": seconds, "width": width, "height": height,
               "fps": s.fps, "bytes": bytes,
               "text": format!("{seconds} s from {}, {width}×{height} at {} fps", device.name, s.fps)}))
@@ -259,7 +262,7 @@ fn record(mut cmd: Command, seconds: u32, fps: u32, job: &Job) -> Result<String>
 
 // ------------------------------------------------------------------ the live pane
 
-fn open(pane: &Pane) -> Result<Value> {
+fn open(pane: &Pane) -> Result<PaneOpenResponse> {
     let h = pane.handle();
     let (device, found) = camera(h, &pane.target()["device"])?;
     let (_, s) = settings(h);
@@ -273,11 +276,12 @@ fn open(pane: &Pane) -> Result<Value> {
         }
     });
     let hinted = live.clone();
-    pane.on_input(move |_: &Pane, event: &Value| -> Result<()> {
-        if event["kind"] != "hint" {
+    pane.on_input(move |_: &Pane, input: &PaneInput| -> Result<()> {
+        if input.kind != "hint" {
             return Err(Refused::new("the camera pane takes hints only").into());
         }
         // a hint says only what changed (the speaker's alone has no rate); a rate may be a fraction
+        let event = input.json();
         let number =
             |key: &str| event[key].as_f64().filter(|n| *n >= 0.0).map(|n| n.ceil().min(f64::from(u32::MAX)) as u32);
         if let Some(live) = hinted.upgrade() {
