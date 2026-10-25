@@ -301,8 +301,8 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "pointman-extension"
-version = "0.1.0"
-source = "git+https://github.com/pointman-ai/pointman-extension?rev=d534ff202e24b802520e51a15ffefd78c0af1583#d534ff202e24b802520e51a15ffefd78c0af1583"
+version = "0.2.0"
+source = "git+https://github.com/pointman-ai/pointman-extension?rev=d338e27a5719139d7cafae4f838c1b699395710b#d338e27a5719139d7cafae4f838c1b699395710b"
 dependencies = [
  "anyhow",
  "buffa",
