@@ -114,7 +114,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cam"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -301,8 +301,8 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "pointman-extension"
-version = "0.2.0"
-source = "git+https://github.com/pointman-ai/pointman-extension?rev=d338e27a5719139d7cafae4f838c1b699395710b#d338e27a5719139d7cafae4f838c1b699395710b"
+version = "0.5.0"
+source = "git+https://github.com/pointman-ai/pointman-extension?rev=b4b2f874595fac71d220bb920e96c6390678c5a2#b4b2f874595fac71d220bb920e96c6390678c5a2"
 dependencies = [
  "anyhow",
  "buffa",
