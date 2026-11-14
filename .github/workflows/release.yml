@@ -1,8 +1,10 @@
 # cam's release: push a tag that's extension.toml's version (`git tag v0.1.0 && git push origin v0.1.0`).
 # Each platform in extension.toml is built and packed as cam-<version>-<platform>.tar.gz, with
-# extension.toml, bin/cam, README.md and LICENSE at its top. Then one job makes the release with every
-# archive attached (gh keeps it a draft until they're all up), so core's `released` delivery finds each
-# platform's build; a release missing one is refused. As rota's, and message-board's sdk/template release.yml.example.
+# extension.toml, bin/cam, README.md and LICENSE at its top. A first job makes the tag's release
+# as a draft, each build uploads its archive to it, and a last job publishes it once they're all up,
+# so core's `released` delivery finds each platform's build; one missing is refused. The archives go
+# straight onto the release, never through Actions' artifact storage: that storage is the account's,
+# and once it's full no build can hand its archive on. As rota's, and message-board's sdk/template release.yml.example.
 #
 # Linux builds are musl, so static: they run on any distribution, NixOS included. Both macOS builds are
 # made on macos-14 (Apple silicon); the Intel one is cross-compiled, so its tests run on the other three.
@@ -15,7 +17,18 @@ permissions:
   contents: write
 
 jobs:
+  draft:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: The tag's release, a draft until every platform's build is on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --draft
+
   build:
+    needs: draft
     strategy:
       fail-fast: true
       matrix:
@@ -53,21 +66,18 @@ jobs:
           cp extension.toml README.md LICENSE pkg/
           tar -czf "cam-$VERSION-${{ matrix.platform }}.tar.gz" -C pkg extension.toml bin README.md LICENSE
           tar -tzvf "cam-$VERSION-${{ matrix.platform }}.tar.gz"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}
-          path: "*.tar.gz"
-          if-no-files-found: error
+      - name: Its archive, on the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          command -v gh >/dev/null || brew install gh
+          gh release upload "$GITHUB_REF_NAME" "cam-$VERSION-${{ matrix.platform }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
 
   release:
     needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: The release, with every platform's build
+      - name: The release, published with every platform's build
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
