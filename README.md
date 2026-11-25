@@ -34,14 +34,14 @@ on a Mac, `apt install gphoto2` on Debian or Ubuntu, or nix's `gphoto2`.
 
 ## Commands
 
-Run on a machine like any extension's: `/cam list`, `/cam still sony`, `/cam clip 0 20` in a thread, or
+Run on a machine like any extension's: `/cam list`, `/cam still sony`, `/cam clip 0 20` in a channel, or
 `create_job` for agents.
 
 | Kind | Params | What |
 |---|---|---|
 | `cam.list` | | `{devices: [{id, name, virtual}], microphones: [{id, name}], default, notes}`: what's missing to find more, too |
-| `cam.still` | `device?`, `width?`, `thread_id?` | One JPEG, published to the thread like any file. A gphoto2 camera's is its full photo, unless a `width` is asked for |
-| `cam.clip` | `device?`, `seconds` (1–60, default 10), `thread_id?` | An H.264 MP4, published; cancellable |
+| `cam.still` | `device?`, `width?`, `channel_id?` | One JPEG, published to the channel like any file. A gphoto2 camera's is its full photo, unless a `width` is asked for |
+| `cam.clip` | `device?`, `seconds` (1–60, default 10), `channel_id?` | An H.264 MP4, published; cancellable |
 
 A still or clip on a camera only one program can use at a time (gphoto2's, and any on Linux) pauses a live
 pane on it, and starts it again after.
