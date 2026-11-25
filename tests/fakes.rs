@@ -64,7 +64,7 @@ fn without_gphoto2_it_says_how_to_get_it() {
 #[test]
 fn a_still_waits_for_the_camera_to_settle_in_a_mode_it_has() {
     let cam = Cam::start(fakes(), json!({"quality": 3}));
-    let done = cam.node.run("cam.still", json!({"device": "fake", "thread_id": 11576})).unwrap();
+    let done = cam.node.run("cam.still", json!({"device": "fake", "channel_id": 11576})).unwrap();
     assert_eq!(done.result["name"], fake_camera());
     assert_eq!((done.result["width"].clone(), done.result["height"].clone()), (json!(640), json!(424)));
     assert_eq!(done.outputs.len(), 1);

@@ -1,10 +1,10 @@
 [extension]
 id = "cam"
 name = "Camera"
-version = "0.3.0"
+version = "0.4.0"
 publisher = "aurelio"
 summary = "Stills, clips and a live pane from any camera this machine can see."
-node = ">=0.4.0"
+node = ">=0.5.0"
 platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
 
 [run]
@@ -63,7 +63,7 @@ summary = "The cameras this machine can see, by number and name"
 [[commands]]
 kind = "cam.still"
 title = "Take a still"
-params = { type = "object", properties = { device = { type = "string", description = "The camera: its number or any part of its name (cam.list); left out, the machine's default. test is a test card." }, width = { type = "integer", minimum = 160, maximum = 3840, description = "The most pixels across; left out, the setting (1280)." }, thread_id = { type = "integer", description = "Post it in this thread." } }, additionalProperties = false }
+params = { type = "object", properties = { device = { type = "string", description = "The camera: its number or any part of its name (cam.list); left out, the machine's default. test is a test card." }, width = { type = "integer", minimum = 160, maximum = 3840, description = "The most pixels across; left out, the setting (1280)." }, channel_id = { type = "integer", description = "Post it in this channel." } }, additionalProperties = false }
 outputs = ["image"]
 slash = "still"
 summary = "A still from a camera, posted here: /cam still [camera]"
@@ -71,7 +71,7 @@ summary = "A still from a camera, posted here: /cam still [camera]"
 [[commands]]
 kind = "cam.clip"
 title = "Record a clip"
-params = { type = "object", properties = { device = { type = "string", description = "The camera: its number or any part of its name (cam.list); left out, the machine's default. test is a test card." }, seconds = { type = "integer", minimum = 1, maximum = 60, default = 10, description = "How long, 1 to 60 seconds." }, thread_id = { type = "integer", description = "Post it in this thread." } }, additionalProperties = false }
+params = { type = "object", properties = { device = { type = "string", description = "The camera: its number or any part of its name (cam.list); left out, the machine's default. test is a test card." }, seconds = { type = "integer", minimum = 1, maximum = 60, default = 10, description = "How long, 1 to 60 seconds." }, channel_id = { type = "integer", description = "Post it in this channel." } }, additionalProperties = false }
 cancellable = true
 outputs = ["video"]
 slash = "clip"
